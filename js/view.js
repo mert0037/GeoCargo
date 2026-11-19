@@ -16,11 +16,14 @@ function dialog(title,text,buttons){
 function button(text,click){const b=document.createElement('button');b.textContent=text;b.onclick=click;return b}
 function mapView(select,hover,openEvent){
   const map=L.map('map',{minZoom:1,maxZoom:7,zoomControl:false,maxBounds:[[-85,-180],[85,180]],maxBoundsViscosity:1}).setView([34,29],3);
+
   L.control.zoom({position:'bottomleft'}).addTo(map);
   // A solid vector underlay remains visible through any missing imagery tiles.
   map.createPane('landBase').style.zIndex=190;
-  L.geoJSON(countries,{pane:'landBase',interactive:false,style:{stroke:false,fillColor:'#314c51',fillOpacity:1}}).addTo(map);
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{noWrap:true,attribution:'Imagery © Esri and contributors · Boundaries: Natural Earth'}).addTo(map);
+  L.geoJSON(countries,{attribution:'Natural Earth',pane:'landBase',interactive:false,style:{stroke:false,fillColor:'#314c51',fillOpacity:1}}).addTo(map);
+  const imagery=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{bounds:[[-85.0511,-180],[85.0511,180]],noWrap:true,attribution:'Imagery © Esri and contributors · Boundaries: Natural Earth'});
+  function updateImagery(){if(map.getZoom()<=2)imagery.remove();else if(!map.hasLayer(imagery))imagery.addTo(map)}
+  updateImagery();map.on('zoomend',updateImagery);
   const renderer=L.svg(),regions=new Map(),nodes=new Map();
   const borders=L.geoJSON(countries,{renderer,interactive:false,style:{color:'#ddd',weight:.6,opacity:.32,fillOpacity:0},onEachFeature:(f,l)=>regions.set(f.properties.name,l)}).addTo(map);
   regions.set('Singapore',L.circle([...hubs.Singapore].reverse(),{radius:14000,renderer,interactive:false,fillOpacity:0,opacity:0}).addTo(borders));
@@ -43,8 +46,9 @@ function mapView(select,hover,openEvent){
     for(const city of Object.keys(hubs)){
       const active=g.active.has(city),queue=g.orders.filter(o=>o.at===city&&!o.leg).length;
       const alert=crisis?.city===city||(g.effect?.end>g.time&&g.effect.city===city);
-      const state=alert?4:active&&queue>=2?3:(g.levels[city]||0)>1?2:active?1:0;
+      const state=alert?4:active&&queue>=2?3:active&&tier(g)>=3?2:active?1:0;
       states.set(countryOf[city],Math.max(state,states.get(countryOf[city])||0));
+      nodes.get(city).setTooltipContent(t(city)+' · '+hubInfo[city].countryCode+' · '+(active?tr('Active','Etkin'):'$350'));
       nodes.get(city).getElement()?.firstChild.classList.toggle('on',active);
     }
     for(const [name,region] of regions){
@@ -55,7 +59,7 @@ function mapView(select,hover,openEvent){
     }
     routes.clearLayers();g.routes.forEach(edge=>line(edge,routes));
     pins.clearLayers();
-    function pin(city,text,alert,action){L.marker(pos(city),{title:text,zIndexOffset:800,icon:icon('<b class="pin '+(alert?'alert':'')+'">'+(alert?'!':'★')+'</b>',24,[0,38])}).bindTooltip(text).on('click',action).addTo(pins)}
+    function pin(city,text,alert,action){L.marker(pos(city),{title:text,zIndexOffset:800,icon:icon('<b class="pin '+(alert?'alert':'')+'">'+(alert?'!':'★')+'</b>',24,[0,38])}).bindTooltip(t(text)).on('click',action).addTo(pins)}
     if(g.offer)pin(g.offer.city,'Trade tender',false,()=>openEvent(g.offer));
     if(crisis)pin(crisis.city,crisis.title,true,()=>openEvent(crisis));
     g.orders.filter(o=>o.priority).forEach(o=>pin(o.to,'Priority contract',false,()=>openEvent(o)));
@@ -79,13 +83,13 @@ function mapView(select,hover,openEvent){
 }
 function hudView(){
   const cells=new Map();
-  for(const key of ['Company','Budget','Flow / 10s','Fleet','Staff','Score']){
+  for(const key of ['Company','Budget','Flow / 15s','Fleet','Staff','Score']){
     const box=document.createElement('div'),label=document.createElement('small'),value=document.createElement('strong');
     label.textContent=key;box.append(label,value);field('metrics').append(box);cells.set(key,{box,value});
   }
   return (g,reset=false)=>{
     function metric(key,num,format,deltaLabel){
-      const cell=cells.get(key);if(!reset&&num===cell.target)return;
+      const cell=cells.get(key);cell.box.firstChild.textContent=t(key);if(!reset&&num===cell.target)return;
       const prev=cell.target;cell.target=num;cancelAnimationFrame(cell.frame);
       const start=performance.now(),base=reset?num:(cell.current??num);
       function tween(now){const f=Math.min(1,(now-start)/260);cell.current=base+(num-base)*f;cell.value.textContent=format(Math.round(cell.current));if(f<1)cell.frame=requestAnimationFrame(tween)}
@@ -95,13 +99,14 @@ function hudView(){
         cell.box.animate([{boxShadow:'0 0 9px '+(num<prev?'#e25c53':'#61e29f')},{boxShadow:'none'}],600);
       }
     }
-    metric('Company',tier(g),n=>'◈ Lv.'+n+' '+['','Local','Regional','International','Global'][n]);
+    metric('Company',tier(g),n=>'◈ Lv.'+n+' '+t(['','Local Carrier','Regional Network','Continental Fleet','Global Giant'][n]));
     metric('Budget',g.cash,dollars);metric('Score',points(g),String);
-    metric('Flow / 10s',g.flow,n=>(n<0?'▼ −':'▲ +')+dollars(Math.abs(n)));cells.get('Flow / 10s').value.style.color=g.flow<0?'#ff998a':'#94ffbe';
+    metric('Flow / 15s',g.flow,n=>(n<0?'▼ −':'▲ +')+dollars(Math.abs(n)));cells.get('Flow / 15s').value.style.color=g.flow<0?'#ff998a':'#94ffbe';
     const busy=mode=>g.orders.filter(o=>o.leg?.edge.mode===mode).length;
     metric('Fleet',capacity(g,'Air')+capacity(g,'Freight'),()=> '⚓ '+busy('Freight')+'/'+capacity(g,'Freight')+'  ✈ '+busy('Air')+'/'+capacity(g,'Air'),' vehicle');
     cells.get('Fleet').value.textContent='⚓ '+busy('Freight')+'/'+capacity(g,'Freight')+'  ✈ '+busy('Air')+'/'+capacity(g,'Air');
-    metric('Staff',capacity(g,'staff'),n=>n+'/'+(2+tier(g)*2),' crew');
+    metric('Staff',capacity(g,'staff'),n=>n+' · '+g.routes.length+'/'+(n*2),tr(' crew',' kişi'));
+    cells.get('Staff').value.textContent=g.staff+' · '+g.routes.length+'/'+(2*g.staff);
     const share=Math.round(g.active.size/Object.keys(hubs).length*100);
     field('market').value=share;field('share').textContent=share+'%';field('risk').value=Math.min(100,(5-g.lives)*16+(incident||g.effect?.end>g.time?20:0));
     field('lives').textContent='♥'.repeat(g.lives);
@@ -112,8 +117,8 @@ function analyticsView(){
   return g=>{
     if(field('ops').hidden)return;
     if(!window.Chart){field('chart').replaceWith(Object.assign(document.createElement('p'),{id:'chart',textContent:'Net flow: '+dollars(g.flow)+' / 10s'}));return}
-    chart??=new Chart(field('chart'),{type:'line',data:{labels:[],datasets:[{label:'Net cash flow ($)',data:[],borderColor:'#76e9c6',pointRadius:0}]},options:{animation:false,plugins:{legend:{display:false}}}});
-    chart.data.labels=g.series.map(x=>x[0]);chart.data.datasets[0].data=g.series.map(x=>x[1]);chart.update('none');
+    chart??=new Chart(field('chart'),{type:'line',data:{labels:[],datasets:[{label:'Income',data:[],borderColor:'#76e9c6',pointRadius:0},{label:'Expense',data:[],borderColor:'#fb9286',pointRadius:0}]},options:{animation:false,plugins:{legend:{display:true}}}});
+    chart.data.labels=g.series.map(x=>x[0]);chart.data.datasets[0].data=g.series.map(x=>x[1]);chart.data.datasets[1].data=g.series.map(x=>x[2]);chart.data.datasets[0].label=tr('Income','Gelir');chart.data.datasets[1].label=tr('Expense','Gider');chart.update('none');
   };
 }
 
