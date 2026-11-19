@@ -17,12 +17,14 @@ function orderFactory() {
     const from=[...game.active][count % game.active.size];
     const nearby=Object.keys(hubs).filter(city=>city!==from).sort((a,b)=>kmBetween(from,a)-kmBetween(from,b));
     const to=count===0?'Suez':nearby[(count*3)%(3+phase*4)];
-    return {id:++count,from,to,at:from,progress:0,leg:null,deadline:Math.min(240,game.time+44-phase*2),pay:Math.round(1050+kmBetween(from,to)*0.19)};
+    const priority=(count+1)%4===0;
+    return {id:++count,priority,from,to,at:from,progress:0,leg:null,deadline:Math.min(240,game.time+44-phase*2),pay:Math.round((1050+kmBetween(from,to)*0.19)*(priority?1.5:1))};
   };
 }
 function newGame() {
   const game={active:new Set(['Istanbul']),routes:[],orders:[],time:0,cash:3000,lives:5,delivered:0,bonus:0,effect:null,generate:orderFactory()};
   game.orders.push(game.generate(game));
+  Object.assign(game,{fleet:{Air:1,Freight:2},staff:2,levels:{Istanbul:1},ledger:[],events:[],series:[],flow:0});
   return game;
 }
 function slowdown(game,edge) {
@@ -51,15 +53,24 @@ function nextLeg(game,from,to) {
 }
 function tick(game) {
   game.time++;
+  if(game.time%3===0){
+    const revenue=game.routes.length*7+Object.values(game.levels).reduce((n,v)=>n+(v-1)*4,0);
+    const expense=game.staff*2+game.fleet.Air*3+game.fleet.Freight;
+    transact(game,revenue-expense,'Regional trade / upkeep');
+  }
   if(releaseTimes.includes(game.time))game.orders.push(game.generate(game));
   game.orders=game.orders.filter(order=>{
-    order.leg??=nextLeg(game,order.at,order.to);
+    if(!order.leg){
+      const leg=nextLeg(game,order.at,order.to);
+      const busy=game.orders.filter(o=>o.leg);
+      if(leg && busy.length<capacity(game,'staff') && busy.filter(o=>o.leg.edge.mode===leg.edge.mode).length<capacity(game,leg.edge.mode))order.leg=leg;
+    }
     if(order.leg){
       order.progress+=1/(order.leg.edge.duration*slowdown(game,order.leg.edge));
       if(order.progress>=1){order.at=order.leg.target;order.leg=null;order.progress=0}
     }
     if(order.at===order.to){
-      game.cash+=order.pay;game.delivered++;game.bonus+=order.deadline-game.time;
+      transact(game,order.pay,'Shipment delivered',order.to);game.delivered++;game.bonus+=order.deadline-game.time;
       return false;
     }
     if(game.time>=order.deadline){game.lives=Math.max(0,game.lives-1);return false}
@@ -67,3 +78,14 @@ function tick(game) {
   });
 }
 const points=g=>g.delivered*100+g.active.size*250+g.bonus+Math.floor(g.cash/10);
+
+function capacity(g,type){
+  const impaired=g.effect?.end>g.time && (type==='staff'||type===g.effect.mode);
+  return Math.max(0,(type==='staff'?g.staff:g.fleet[type])-(impaired?1:0));
+}
+function transact(g,amount,label,city){
+  g.cash+=amount;g.ledger.push({time:g.time,amount});
+  if(city)g.events.push({amount,label,city});
+}
+function tier(g){return Math.min(4,1+Math.floor((g.active.size-1)/3))}
+
