@@ -7,11 +7,11 @@ function news(text){
 function pick(id,values,chosen){field(id).replaceChildren(...values.map(v=>new Option(t(v),v)));field(id).value=chosen}
 function selection(){
   const a=field('origin').value,b=field('dest').value;if(!a||!b||a===b)return null;
-  const edge=planRoute(a,b,field('mode').value);return {edge,total:edge.price+(game.active.has(b)?0:350)};
+  const edge=planRoute(a,b,field('mode').value);return {edge,total:edge.price+(game.active.has(b)?0:openingFee(b))};
 }
 function quote(){
   const p=selection();network.preview(p?.edge);
-  field('quote').textContent=p?Math.round(p.edge.km).toLocaleString('en-US')+' km · '+dollars(p.total)+' · '+Math.ceil(p.edge.duration)+'s':t('Choose a destination');
+  field('quote').textContent=p?Math.round(p.edge.km).toLocaleString('en-US')+' km · '+dollars(p.total)+' · '+Math.ceil(p.edge.duration)+'s · '+tr('Fuel','Yakıt')+' '+dollars(voyageCost(p.edge))+' · '+tr('After build','Kalan')+' '+dollars(game.cash-p.total)+(game.cash-p.total<900?' ⚠':'')+(megaMarkets.has(p.edge.b)&&!game.active.has(p.edge.b)?' · '+tr('Hub upkeep','Merkez gideri')+' $140/15s':''):t('Choose a destination');
 }
 function orderPlan(o){field('origin').value=o.at;field('dest').value=o.to;source=null;quote();network.focus(o.to)}
 function refresh(reset=false){
@@ -20,7 +20,7 @@ function refresh(reset=false){
   if(game.series.at(-1)?.[0]===game.time)game.series.pop();game.series.push(sample);
   hud(game,reset);network.draw(game,incident);analytics(game);
   field('clock').textContent=tr('Q','Ç')+Math.min(4,1+Math.floor(game.time/60))+' · '+Math.floor((game.time===240?0:60-game.time%60)/60)+':'+String((game.time===240?0:60-game.time%60)%60).padStart(2,'0');
-  const card=o=>button(t(o.from)+' → '+t(o.to)+' · '+(o.deadline-game.time)+'s',()=>orderPlan(o));
+  const card=o=>button((o.priority?tr('Express','Ekspres'):tr('Standard','Standart'))+' · '+t(o.from)+' → '+t(o.to)+' · '+(o.deadline-game.time)+'s',()=>orderPlan(o));
   field('tasks').replaceChildren(...[...game.orders].sort((a,b)=>a.deadline-b.deadline).slice(0,2).map(card));
   field('orders').replaceChildren(...game.orders.map(o=>{const b=card(o),p=document.createElement('progress');p.max=44;p.value=o.deadline-game.time;b.append(p);return b}));
   field('routes').replaceChildren(...game.routes.map(e=>button(t(e.a)+' → '+t(e.b)+' · '+t(e.mode)+' ×',()=>{
@@ -96,6 +96,7 @@ function step(){
    if(game.story.get('inspection')){game.discount=.9;transact(game,600,tr('Clean audit','Temiz denetim'),'Istanbul')}
    else if(Math.random()<.7){game.heldMode='Freight';game.hold=time+20;game.demotion=1;transact(game,-1400,tr('Inspection fine','Denetim cezası'),'Istanbul')}
  }
+ if(game.cash<=-500){refresh();finish();return}
  if(time===180){if(game.story.get('crew'))game.loyal=true;else game.staff=Math.max(0,game.staff-1)}
  const key={68:'inspection',95:'crew',138:'suez',188:'medical'}[time];
  if(key){incident={key,city:key==='suez'?'Suez':key==='medical'?'Lagos':'Istanbul',title:pair(stories[key][0])};deadline=performance.now()+15000;network.focus(incident.city);showDecision()}

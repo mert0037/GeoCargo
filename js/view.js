@@ -48,7 +48,7 @@ function mapView(select,hover,openEvent){
       const alert=crisis?.city===city||(g.effect?.end>g.time&&g.effect.city===city);
       const state=alert?4:active&&queue>=2?3:active&&tier(g)>=3?2:active?1:0;
       states.set(countryOf[city],Math.max(state,states.get(countryOf[city])||0));
-      nodes.get(city).setTooltipContent(t(city)+' · '+hubInfo[city].countryCode+' · '+(active?tr('Active','Etkin'):'$350'));
+      nodes.get(city).setTooltipContent(t(city)+' · '+hubInfo[city].countryCode+' · '+(active?tr('Active','Etkin'):dollars(openingFee(city))));
       nodes.get(city).getElement()?.firstChild.classList.toggle('on',active);
     }
     for(const [name,region] of regions){

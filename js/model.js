@@ -1,24 +1,44 @@
 // Each campaign owns its network, clock and shipments.
 const releaseTimes = [0, 20, 40, 60, 75, 90, 105, 120, 132, 144, 156, 168, 180, 188, 196, 204, 212, 220];
 const kmBetween = (a, b) => turf.distance(hubs[a], hubs[b]);
+const megaMarkets=new Set(['New York','Shanghai','Rotterdam']);
+const gateways=new Set(['Dubai','Rotterdam']);
+function openingFee(city){return megaMarkets.has(city)?1550:gateways.has(city)?450:250}
+function routeTrade(edge){
+  if(edge.mode==='Air')return 45;
+  return edge.km<=3000?208:120;
+}
+function voyageCost(edge){return Math.round(edge.mode==='Air'?230+edge.km*.035:24+edge.km*.008)}
 function planRoute(a, b, mode) {
   const europe = ['Istanbul','Rotterdam','London','Frankfurt','Lisbon'];
   const asia = ['Dubai','Mumbai','Singapore','Shanghai','Tokyo'];
   const cross = (x,y) => europe.includes(x) && asia.includes(y);
   const via = mode === 'Freight' && (cross(a,b) || cross(b,a)) ? [a,'Suez',b] : [a,b];
   const km = via.slice(1).reduce((total,city,i) => total + kmBetween(via[i],city),0);
-  return {a,b,mode,via,km,price:Math.round(125+km*(mode==='Air'?0.12:0.045)),duration:3+km/(mode==='Air'?1400:650)};
+  const longHaulPremium=Math.max(0,km-3000)**2*.00006;
+  const baseCost=125+km*(mode==='Air'?.12:.045)+longHaulPremium;
+  const gatewayDiscount=gateways.has(a)||gateways.has(b)?0.65:1;
+  return {a,b,mode,via,km,price:Math.round(baseCost*gatewayDiscount),duration:3+km/(mode==='Air'?1400:650)};
 }
 // Closure supplies a fresh shipment sequence on each restart.
 function createOrderGenerator() {
   let count=0;
   return game => {
     const phase=Math.floor(game.time/60);
-    const from=[...game.active][count % game.active.size];
-    const nearby=Object.keys(hubs).filter(city=>city!==from).sort((a,b)=>kmBetween(from,a)-kmBetween(from,b));
-    const to=count===0?'Suez':nearby[(count*3)%(3+phase*4)];
-    const priority=phase>=1 && (count+1)%4===0 && (phase<2 || tier(game)>=3);
-    return {id:++count,priority,from,to,at:from,progress:0,leg:null,deadline:Math.min(240,game.time+44-phase*2),pay:Math.round((1050+kmBetween(from,to)*0.19)*(priority?1.5:1))};
+    let from='Istanbul',to=count===1?'Frankfurt':'Suez',priority=false;
+    if(count>=2){
+      const active=[...game.active];
+      from=active[(count-2)%active.length];
+      const connected=active.filter(city=>city!==from && nextLeg(game,from,city));
+      const nearby=Object.keys(hubs).filter(city=>!game.active.has(city) && planRoute(from,city,'Freight').km<=5000)
+        .sort((a,b)=>kmBetween(from,a)-kmBetween(from,b));
+      const expansion=phase>0 && count%5===4 && nearby.length;
+      if(expansion || !connected.length)to=nearby[0]||'Suez';
+      else to=connected[count%connected.length];
+      priority=phase>0 && count%3===0 && game.fleet.Air>0 && Boolean(nextLeg(game,from,to,true));
+    }
+    const km=kmBetween(from,to);
+    return {id:++count,priority,from,to,at:from,progress:0,leg:null,hops:0,deadline:Math.min(240,game.time+(priority?32:48)),pay:Math.round((240+km*.12)*(priority?2.6:1))};
   };
 }
 function newGame() {
@@ -27,10 +47,14 @@ function newGame() {
   Object.assign(game,{fleet:{Air:0,Freight:1},staff:1,missed:0,ethics:0,story:createStoryMemory(),scores:createScoreManager(),hold:0,demotion:0,levels:{Istanbul:1},ledger:[],events:[],series:[],flow:0});
   return game;
 }
+function canalAffected(game,edge){
+  if(!game.effect || game.effect.end<=game.time || edge.mode!=='Freight')return false;
+  return edge.via.slice(1).some((city,i)=>turf.booleanIntersects(turf.greatCircle(hubs[edge.via[i]],hubs[city]),game.effect.zone));
+}
 function slowdown(game,edge) {
-  const slow=game.effect?.end>game.time && edge.mode==='Freight' && edge.via.slice(1).some((city,i)=>turf.booleanIntersects(turf.greatCircle(hubs[edge.via[i]],hubs[city]),game.effect.zone));
+  const slow=canalAffected(game,edge);
   const crewBoost=(game.overtime>game.time?1.25:1)*(game.loyal?1.2:1)*(1+.05*game.staff);
-  return (slow?1/.45:1)/crewBoost;
+  return (slow?1/.4:1)/crewBoost;
 }
 // Dijkstra finds the first leg of the quickest open path.
 function nextLeg(game,from,to,airOnly=false) {
@@ -56,8 +80,8 @@ function nextLeg(game,from,to,airOnly=false) {
 function tick(game) {
   game.time++;
   if(game.time%15===0){
-    const revenue=game.routes.length*7+Object.values(game.levels).reduce((n,v)=>n+(v-1)*4,0);
-    const expense=Math.round((game.staff*95+game.fleet.Air*160+game.fleet.Freight*70)*(game.discount||1));
+    const revenue=game.routes.reduce((sum,edge)=>sum+(canalAffected(game,edge)?0:routeTrade(edge)),0);
+    const expense=Math.round((game.staff*95+game.fleet.Air*160+game.fleet.Freight*70+[...game.active].filter(city=>megaMarkets.has(city)).length*140)*(game.discount||1));
     transact(game,revenue,'Trade');transact(game,-expense,'Upkeep');
   }
   if(releaseTimes.includes(game.time))game.orders.push(game.generate(game));
@@ -65,14 +89,16 @@ function tick(game) {
     if(!order.leg){
       const leg=nextLeg(game,order.at,order.to,order.priority);
       const busy=game.orders.filter(o=>o.leg);
-      if(leg && busy.filter(o=>o.leg.edge.mode===leg.edge.mode).length<capacity(game,leg.edge.mode))order.leg=leg;
+      if(leg && busy.filter(o=>o.leg.edge.mode===leg.edge.mode).length<capacity(game,leg.edge.mode)){
+        order.leg=leg;order.hops=(order.hops||0)+1;transact(game,-voyageCost(leg.edge),'Fuel');
+      }
     }
     if(order.leg){
       order.progress+=1/(order.leg.edge.duration*slowdown(game,order.leg.edge));
       if(order.progress>=1){order.at=order.leg.target;order.leg=null;order.progress=0}
     }
     if(order.at===order.to){
-      transact(game,order.medical?1200:Math.round(order.pay*[0,1,1.2,1.45,1.75][tier(game)]),'Shipment delivered',order.to);game.scores.deliver();if(order.medical){game.lives=Math.min(5,game.lives+1);game.ethics++}game.delivered++;game.bonus+=order.deadline-game.time;
+      transact(game,order.medical?1200:Math.round(order.pay*[0,1,1.2,1.45,1.75][tier(game)]*(1+.12*Math.min(2,order.hops-1))),'Shipment delivered',order.to);game.scores.deliver();if(order.medical){game.lives=Math.min(5,game.lives+1);game.ethics++}game.delivered++;game.bonus+=order.deadline-game.time;
       return false;
     }
     if(game.time>=order.deadline){game.missed++;game.scores.miss();game.lives=Math.max(0,game.lives-1);return false}
