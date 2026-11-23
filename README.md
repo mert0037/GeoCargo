@@ -1,4 +1,8 @@
 [▶ Play GeoCargo](https://mert0037.github.io/GeoCargo/)
+
+Hüsamettin Mert Mutlu
+2200674058
+
 # GeoCargo — Global Logistics Command
 
 GeoCargo is a browser-based logistics strategy game I developed for **GMT 458 – Web GIS (Assignment 2)**. After the fictional logistics giant Atlas Corp. collapses, you take over a small carrier based in Istanbul and try to grow it into a global network over four quarters without running out of money or lives.
@@ -154,4 +158,4 @@ I used AI tools (**ChatGPT** and **Gemini**) to help with game design, implement
 * **Checking balance with concrete numbers:** Comparing passive corridor income directly against 15-second upkeep showed why a starting network that looked busy could still slowly lose money, which made it much easier to tune the economy.
 
 **AI Interaction URL(s):**
-* []
+* [https://share.gemini.google/a4AtszDOTxXH]
